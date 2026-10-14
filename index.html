@@ -92,7 +92,7 @@
 
         // Pedometer variables
         let isStepCooldown = false;
-        const stepThreshold = 14; // 加速度ベクトルの閾値 (m/s^2)。重力約9.8より明確に強い揺れだけ数える
+        const stepThreshold = 11; // 加速度ベクトルの閾値 (m/s^2)。重力約9.8より強い揺れだけ数える
 
         // 現在地を中心に、進行方向が常に上になるように描く
         function worldToLocal(x, y) {
