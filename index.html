@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>歩行トラッカー (自律航法)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; touch-action: manipulation; }
+        canvas { background-color: #ffffff; }
+    </style>
+</head>
+<body class="bg-slate-100 min-h-screen flex flex-col items-center py-6 px-4">
+
+    <div class="w-full max-w-md bg-white rounded-2xl shadow-lg overflow-hidden mb-6 p-5">
+        <h1 class="text-2xl font-extrabold text-center text-slate-800 mb-2">Pedometer & Tracker</h1>
+        <p class="text-xs text-slate-500 text-center mb-5">
+            GPSを使用せず、センサーで移動の軌跡と距離を計算します。<br>
+            ※端末を手に持ち、画面を上にして歩いてください。
+        </p>
+        
+        <div class="flex justify-center">
+            <button id="permissionBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-full shadow-md transition duration-300 w-full">
+                センサーを許可 / 計測開始
+            </button>
+        </div>
+    </div>
+
+    <div class="w-full max-w-md bg-white rounded-2xl shadow-lg overflow-hidden p-5 mb-6">
+        <h2 class="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3">Sensor Data</h2>
+        <div class="grid grid-cols-2 gap-4">
+            <div class="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                <div class="text-xs text-slate-500 mb-1">現在の方角</div>
+                <div class="text-lg font-mono font-bold text-slate-800" id="headingText">--° (北)</div>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                <div class="text-xs text-slate-500 mb-1">歩数</div>
+                <div class="text-lg font-mono font-bold text-indigo-600"><span id="stepCount">0</span> <span class="text-xs text-slate-400">歩</span></div>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                <div class="text-xs text-slate-500 mb-1">現在地 (X, Y)</div>
+                <div class="text-sm font-mono font-bold text-slate-700">X: <span id="posX">0.0</span>m</div>
+                <div class="text-sm font-mono font-bold text-slate-700">Y: <span id="posY">0.0</span>m</div>
+            </div>
+            <div class="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                <div class="text-xs text-slate-500 mb-1">原点からの変位</div>
+                <div class="text-lg font-mono font-bold text-emerald-600"><span id="displacement">0.0</span> <span class="text-xs text-slate-400">m</span></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="w-full max-w-md bg-white rounded-2xl shadow-lg overflow-hidden p-5 relative">
+        <h2 class="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3 flex justify-between items-center">
+            <span>Path Map (1m = 10px)</span>
+            <span class="text-xs bg-slate-200 text-slate-600 px-2 py-1 rounded">上が北(Y+)</span>
+        </h2>
+        
+        <div class="border-2 border-slate-200 rounded-xl overflow-hidden relative bg-slate-50">
+            <canvas id="mapCanvas" width="340" height="340" class="w-full h-auto block"></canvas>
+            
+            <button id="resetBtn" class="absolute bottom-3 right-3 bg-white/90 text-rose-500 border border-rose-200 hover:bg-rose-50 font-bold text-xs py-2 px-4 rounded-lg shadow-sm transition">
+                リセット
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('mapCanvas');
+        const ctx = canvas.getContext('2d');
+        const headingTextEl = document.getElementById('headingText');
+        const stepCountEl = document.getElementById('stepCount');
+        const posXEl = document.getElementById('posX');
+        const posYEl = document.getElementById('posY');
+        const displacementEl = document.getElementById('displacement');
+        const permissionBtn = document.getElementById('permissionBtn');
+        const resetBtn = document.getElementById('resetBtn');
+
+        // State variables
+        let isTracking = false;
+        let headingDegrees = 0;
+        let headingRadians = 0;
+        let steps = 0;
+        const STEP_LENGTH_METERS = 0.7; // 1歩 = 0.7m
+        const PIXELS_PER_METER = 10; // Canvas描画時のスケール (1m = 10px)
+
+        // Mathematical coordinates (in meters)
+        let x_m = 0; 
+        let y_m = 0; // 北をプラス方向とする
+
+        // Path history to draw lines
+        let path = [{x: 0, y: 0}];
+
+        // Pedometer variables
+        let isStepCooldown = false;
+        const stepThreshold = 11.5; // 加速度ベクトルの閾値 (m/s^2)
+
+        // Draw initial center origin
+        function drawPath() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw grid (optional, for better visibility)
+            ctx.strokeStyle = '#e2e8f0';
+            ctx.lineWidth = 1;
+            for(let i = 0; i < canvas.width; i+=PIXELS_PER_METER*5) {
+                ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, canvas.height); ctx.stroke();
+            }
+            for(let j = 0; j < canvas.height; j+=PIXELS_PER_METER*5) {
+                ctx.beginPath(); ctx.moveTo(0, j); ctx.lineTo(canvas.width, j); ctx.stroke();
+            }
+
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+
+            // Draw paths
+            if (path.length > 1) {
+                ctx.beginPath();
+                ctx.moveTo(centerX + path[0].x * PIXELS_PER_METER, centerY - path[0].y * PIXELS_PER_METER);
+                for (let i = 1; i < path.length; i++) {
+                    // Canvas Y axis is downwards, so we subtract to make North (positive Y) go up
+                    const px = centerX + path[i].x * PIXELS_PER_METER;
+                    const py = centerY - path[i].y * PIXELS_PER_METER;
+                    ctx.lineTo(px, py);
+                }
+                ctx.strokeStyle = '#6366f1'; // Indigo-500
+                ctx.lineWidth = 3;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.stroke();
+            }
+
+            // Draw origin marker
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, 4, 0, Math.PI * 2);
+            ctx.fillStyle = '#94a3b8';
+            ctx.fill();
+
+            // Draw current position marker
+            const currentPx = centerX + x_m * PIXELS_PER_METER;
+            const currentPy = centerY - y_m * PIXELS_PER_METER;
+            
+            ctx.beginPath();
+            ctx.arc(currentPx, currentPy, 6, 0, Math.PI * 2);
+            ctx.fillStyle = '#ef4444'; // Red-500
+            ctx.fill();
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Draw direction indicator
+            ctx.beginPath();
+            ctx.moveTo(currentPx, currentPy);
+            const dirX = currentPx + Math.sin(headingRadians) * 15;
+            const dirY = currentPy - Math.cos(headingRadians) * 15;
+            ctx.lineTo(dirX, dirY);
+            ctx.strokeStyle = '#ef4444';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        function getDirectionName(degrees) {
+            if (degrees >= 315 || degrees < 45) return '北';
+            if (degrees >= 45 && degrees < 135) return '東';
+            if (degrees >= 135 && degrees < 225) return '南';
+            if (degrees >= 225 && degrees < 315) return '西';
+            return '';
+        }
+
+        function updateDisplay() {
+            // Update UI elements
+            headingTextEl.innerText = `${headingDegrees}° (${getDirectionName(headingDegrees)})`;
+            stepCountEl.innerText = steps;
+            posXEl.innerText = x_m.toFixed(1);
+            posYEl.innerText = y_m.toFixed(1);
+            
+            // Calculate displacement from origin (Distance formula: sqrt(x^2 + y^2))
+            const displacement = Math.sqrt(x_m * x_m + y_m * y_m);
+            displacementEl.innerText = displacement.toFixed(1);
+
+            drawPath();
+        }
+
+        function handleOrientation(event) {
+            let angle = 0;
+            if (event.webkitCompassHeading) {
+                // iOS: true north
+                angle = event.webkitCompassHeading;
+            } else if (event.alpha !== null) {
+                // Android: generally based on initial orientation
+                angle = 360 - event.alpha;
+            }
+
+            headingDegrees = Math.round(angle);
+            headingRadians = angle * (Math.PI / 180);
+            updateDisplay();
+        }
+
+        function handleMotion(event) {
+            const acc = event.accelerationIncludingGravity;
+            if (!acc) return;
+
+            // Calculate magnitude of 3D acceleration vector
+            const magnitude = Math.sqrt(acc.x * acc.x + acc.y * acc.y + acc.z * acc.z);
+
+            // Simple peak detection
+            if (magnitude > stepThreshold && !isStepCooldown) {
+                steps++;
+                
+                // Calculate new coordinates
+                // East is +X (sin), North is +Y (cos)
+                x_m += STEP_LENGTH_METERS * Math.sin(headingRadians);
+                y_m += STEP_LENGTH_METERS * Math.cos(headingRadians);
+
+                // Save to path history
+                path.push({x: x_m, y: y_m});
+
+                updateDisplay();
+
+                // Prevent multiple counts for a single step
+                isStepCooldown = true;
+                setTimeout(() => {
+                    isStepCooldown = false;
+                }, 330);
+            }
+        }
+
+        async function requestPermissions() {
+            if (isTracking) return;
+
+            try {
+                // Request orientation permission (iOS 13+)
+                if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    const orientationPerm = await DeviceOrientationEvent.requestPermission();
+                    if (orientationPerm !== 'granted') {
+                        alert('方角センサーのアクセスが拒否されました。');
+                        return;
+                    }
+                }
+
+                // Request motion permission (iOS 13+)
+                if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+                    const motionPerm = await DeviceMotionEvent.requestPermission();
+                    if (motionPerm !== 'granted') {
+                        alert('加速度センサーのアクセスが拒否されました。');
+                        return;
+                    }
+                }
+
+                // Start listening to events
+                window.addEventListener('deviceorientation', handleOrientation);
+                window.addEventListener('devicemotion', handleMotion);
+                
+                isTracking = true;
+                permissionBtn.innerText = '● 計測中...';
+                permissionBtn.classList.replace('bg-indigo-600', 'bg-emerald-600');
+                permissionBtn.classList.replace('hover:bg-indigo-700', 'hover:bg-emerald-700');
+                
+            } catch (error) {
+                alert('センサーの初期化に失敗しました。HTTPS環境で実行してください。');
+                console.error(error);
+            }
+        }
+
+        // Reset button logic
+        resetBtn.addEventListener('click', () => {
+            x_m = 0;
+            y_m = 0;
+            steps = 0;
+            path = [{x: 0, y: 0}];
+            updateDisplay();
+        });
+
+        // Event listeners
+        permissionBtn.addEventListener('click', requestPermissions);
+
+        // Initial render
+        drawPath();
+
+    </script>
+</body>
+</html>
