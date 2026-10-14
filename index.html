@@ -120,6 +120,63 @@
             ctx.restore();
         }
 
+        function drawCompass() {
+            const x = canvas.width - 44;
+            const y = 44;
+            const radius = 32;
+
+            ctx.save();
+            ctx.translate(x, y);
+
+            ctx.beginPath();
+            ctx.arc(0, 0, radius, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255,255,255,0.95)';
+            ctx.fill();
+            ctx.strokeStyle = '#94a3b8';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+
+            ctx.save();
+            ctx.rotate(-headingRadians);
+            ctx.beginPath();
+            ctx.moveTo(0, -16);
+            ctx.lineTo(5, 2);
+            ctx.lineTo(-5, 2);
+            ctx.closePath();
+            ctx.fillStyle = '#dc2626';
+            ctx.fill();
+            ctx.beginPath();
+            ctx.moveTo(0, 15);
+            ctx.lineTo(5, -1);
+            ctx.lineTo(-5, -1);
+            ctx.closePath();
+            ctx.fillStyle = '#64748b';
+            ctx.fill();
+            ctx.restore();
+
+            const labels = [
+                { text: 'N', color: '#dc2626', angle: 0 },
+                { text: 'E', color: '#475569', angle: 90 },
+                { text: 'S', color: '#475569', angle: 180 },
+                { text: 'W', color: '#475569', angle: 270 }
+            ];
+            ctx.font = 'bold 11px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            labels.forEach((label) => {
+                const angle = label.angle * Math.PI / 180;
+                const dx = Math.sin(angle);
+                const dy = -Math.cos(angle);
+                const theta = -headingRadians;
+                const xOff = (dx * Math.cos(theta) - dy * Math.sin(theta)) * 23;
+                const yOff = (dx * Math.sin(theta) + dy * Math.cos(theta)) * 23;
+                ctx.fillStyle = label.color;
+                ctx.fillText(label.text, xOff, yOff);
+            });
+
+            ctx.restore();
+        }
+
         function drawPath() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -181,6 +238,7 @@
             ctx.restore();
 
             drawDirectionArrow(centerX, centerY);
+            drawCompass();
         }
 
         function getDirectionName(degrees) {
