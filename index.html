@@ -52,7 +52,7 @@
     <div class="w-full max-w-md bg-white rounded-2xl shadow-lg overflow-hidden p-5 relative">
         <h2 class="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3 flex justify-between items-center">
             <span>Path Map (1m = 10px)</span>
-            <span class="text-xs bg-slate-200 text-slate-600 px-2 py-1 rounded">上が北(Y+)</span>
+            <span class="text-xs bg-slate-200 text-slate-600 px-2 py-1 rounded">上が進行方向</span>
         </h2>
         
         <div class="border-2 border-slate-200 rounded-xl overflow-hidden relative bg-slate-50">
@@ -94,68 +94,93 @@
         let isStepCooldown = false;
         const stepThreshold = 11.5; // 加速度ベクトルの閾値 (m/s^2)
 
-        // Draw initial center origin
-        function drawPath() {
-            // Clear canvas
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // 現在地を中心に、進行方向が常に上になるように描く
+        function worldToLocal(x, y) {
+            return {
+                x: (x - x_m) * PIXELS_PER_METER,
+                y: -(y - y_m) * PIXELS_PER_METER
+            };
+        }
 
-            // Draw grid (optional, for better visibility)
-            ctx.strokeStyle = '#e2e8f0';
-            ctx.lineWidth = 1;
-            for(let i = 0; i < canvas.width; i+=PIXELS_PER_METER*5) {
-                ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, canvas.height); ctx.stroke();
-            }
-            for(let j = 0; j < canvas.height; j+=PIXELS_PER_METER*5) {
-                ctx.beginPath(); ctx.moveTo(0, j); ctx.lineTo(canvas.width, j); ctx.stroke();
-            }
+        function drawDirectionArrow(x, y) {
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.beginPath();
+            ctx.moveTo(0, -18);
+            ctx.lineTo(12, 12);
+            ctx.lineTo(0, 4);
+            ctx.lineTo(-12, 12);
+            ctx.closePath();
+            ctx.fillStyle = '#ef4444';
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineJoin = 'round';
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        function drawPath() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             const centerX = canvas.width / 2;
             const centerY = canvas.height / 2;
 
-            // Draw paths
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            ctx.rotate(-headingRadians);
+
+            const extent = Math.hypot(canvas.width, canvas.height) / 2 + PIXELS_PER_METER * 5;
+            const metersExtent = extent / PIXELS_PER_METER;
+            const gridM = 5;
+            const minX = x_m - metersExtent;
+            const maxX = x_m + metersExtent;
+            const minY = y_m - metersExtent;
+            const maxY = y_m + metersExtent;
+
+            ctx.strokeStyle = '#e2e8f0';
+            ctx.lineWidth = 1;
+            for (let gx = Math.floor(minX / gridM) * gridM; gx <= maxX; gx += gridM) {
+                const a = worldToLocal(gx, minY);
+                const b = worldToLocal(gx, maxY);
+                ctx.beginPath();
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+                ctx.stroke();
+            }
+            for (let gy = Math.floor(minY / gridM) * gridM; gy <= maxY; gy += gridM) {
+                const a = worldToLocal(minX, gy);
+                const b = worldToLocal(maxX, gy);
+                ctx.beginPath();
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+                ctx.stroke();
+            }
+
             if (path.length > 1) {
                 ctx.beginPath();
-                ctx.moveTo(centerX + path[0].x * PIXELS_PER_METER, centerY - path[0].y * PIXELS_PER_METER);
+                const start = worldToLocal(path[0].x, path[0].y);
+                ctx.moveTo(start.x, start.y);
                 for (let i = 1; i < path.length; i++) {
-                    // Canvas Y axis is downwards, so we subtract to make North (positive Y) go up
-                    const px = centerX + path[i].x * PIXELS_PER_METER;
-                    const py = centerY - path[i].y * PIXELS_PER_METER;
-                    ctx.lineTo(px, py);
+                    const point = worldToLocal(path[i].x, path[i].y);
+                    ctx.lineTo(point.x, point.y);
                 }
-                ctx.strokeStyle = '#6366f1'; // Indigo-500
+                ctx.strokeStyle = '#6366f1';
                 ctx.lineWidth = 3;
                 ctx.lineCap = 'round';
                 ctx.lineJoin = 'round';
                 ctx.stroke();
             }
 
-            // Draw origin marker
+            const origin = worldToLocal(0, 0);
             ctx.beginPath();
-            ctx.arc(centerX, centerY, 4, 0, Math.PI * 2);
+            ctx.arc(origin.x, origin.y, 4, 0, Math.PI * 2);
             ctx.fillStyle = '#94a3b8';
             ctx.fill();
 
-            // Draw current position marker
-            const currentPx = centerX + x_m * PIXELS_PER_METER;
-            const currentPy = centerY - y_m * PIXELS_PER_METER;
-            
-            ctx.beginPath();
-            ctx.arc(currentPx, currentPy, 6, 0, Math.PI * 2);
-            ctx.fillStyle = '#ef4444'; // Red-500
-            ctx.fill();
-            ctx.strokeStyle = 'white';
-            ctx.lineWidth = 2;
-            ctx.stroke();
+            ctx.restore();
 
-            // Draw direction indicator
-            ctx.beginPath();
-            ctx.moveTo(currentPx, currentPy);
-            const dirX = currentPx + Math.sin(headingRadians) * 15;
-            const dirY = currentPy - Math.cos(headingRadians) * 15;
-            ctx.lineTo(dirX, dirY);
-            ctx.strokeStyle = '#ef4444';
-            ctx.lineWidth = 2;
-            ctx.stroke();
+            drawDirectionArrow(centerX, centerY);
         }
 
         function getDirectionName(degrees) {
